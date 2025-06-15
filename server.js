@@ -41,6 +41,11 @@ const projectSchema = new mongoose.Schema({
 
 const Project = mongoose.model("Project", projectSchema);
 
+// Root route
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to Portfolio Backend API" });
+});
+
 // --- API Routes ---
 // Get all projects
 app.get("/api/projects", async (req, res) => {
