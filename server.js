@@ -9,14 +9,31 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Set content-type header for all responses
+app.use((req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  next();
+});
+
 // MongoDB Connection
 const connectDB = async () => {
   try {
-    await mongoose.connect(config.mongoUri);
+    if (!config.mongoUri) {
+      throw new Error("MONGODB_URI is not defined");
+    }
+
+    await mongoose.connect(config.mongoUri, {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      family: 4,
+    });
     console.log("Connected to MongoDB");
   } catch (err) {
     console.error("Failed to connect to MongoDB:", err);
-    process.exit(1);
+    // Don't exit in production, let Vercel handle the error
+    if (process.env.NODE_ENV !== "production") {
+      process.exit(1);
+    }
   }
 };
 
@@ -25,18 +42,18 @@ connectDB();
 
 // Mongoose Project Schema and Model
 const projectSchema = new mongoose.Schema({
-  id: String,
-  title: String,
-  description: String,
+  title: { type: String, required: true },
+  description: { type: String, required: true },
   longDescription: String,
-  image: String,
+  image: { type: String, required: true },
   tags: [String],
   demoLink: String,
   codeLink: String,
-  featured: Boolean,
+  featured: { type: Boolean, default: false },
   challenges: String,
   solutions: String,
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
 });
 
 const Project = mongoose.model("Project", projectSchema);
@@ -50,6 +67,9 @@ app.get("/", (req, res) => {
 // Get all projects
 app.get("/api/projects", async (req, res) => {
   try {
+    if (!mongoose.connection.readyState) {
+      throw new Error("Database not connected");
+    }
     const projects = await Project.find().sort({ createdAt: -1 });
     res.json(projects);
   } catch (error) {
@@ -71,9 +91,41 @@ app.get("/api/projects/featured", async (req, res) => {
   }
 });
 
+// Get a single project by ID
+app.get("/api/projects/:id", async (req, res) => {
+  try {
+    if (!mongoose.connection.readyState) {
+      throw new Error("Database not connected");
+    }
+
+    const projectId = req.params.id;
+    console.log("Fetching project with ID:", projectId);
+
+    // Validate MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      console.log("Invalid project ID format:", projectId);
+      return res.status(400).json({ message: "Invalid project ID format" });
+    }
+
+    const project = await Project.findById(projectId);
+    console.log("Found project:", project ? "yes" : "no");
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    res.json(project);
+  } catch (error) {
+    console.error("Error fetching project:", error);
+    res.status(500).json({ error: "Failed to fetch project" });
+  }
+});
+
 // Add a new project
 app.post("/api/projects", async (req, res) => {
   try {
+    if (!mongoose.connection.readyState) {
+      throw new Error("Database not connected");
+    }
     const newProject = new Project(req.body);
     await newProject.save();
     res.status(201).json(newProject);
@@ -86,10 +138,24 @@ app.post("/api/projects", async (req, res) => {
 // Update a project by ID
 app.put("/api/projects/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-    const updatedProject = await Project.findByIdAndUpdate(id, req.body, {
-      new: true,
-    });
+    if (!mongoose.connection.readyState) {
+      throw new Error("Database not connected");
+    }
+
+    const projectId = req.params.id;
+    console.log("Updating project with ID:", projectId);
+
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      console.log("Invalid project ID format:", projectId);
+      return res.status(400).json({ message: "Invalid project ID format" });
+    }
+
+    const updatedProject = await Project.findByIdAndUpdate(
+      projectId,
+      { ...req.body, updatedAt: new Date() },
+      { new: true, runValidators: true }
+    );
+
     if (!updatedProject) {
       return res.status(404).json({ message: "Project not found" });
     }
@@ -103,8 +169,20 @@ app.put("/api/projects/:id", async (req, res) => {
 // Delete a project by ID
 app.delete("/api/projects/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-    const deletedProject = await Project.findByIdAndDelete(id);
+    if (!mongoose.connection.readyState) {
+      throw new Error("Database not connected");
+    }
+
+    const projectId = req.params.id;
+    console.log("Deleting project with ID:", projectId);
+
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      console.log("Invalid project ID format:", projectId);
+      return res.status(400).json({ message: "Invalid project ID format" });
+    }
+
+    const deletedProject = await Project.findByIdAndDelete(projectId);
+
     if (!deletedProject) {
       return res.status(404).json({ message: "Project not found" });
     }
@@ -121,6 +199,7 @@ app.get("/health", (req, res) => {
     status: "ok",
     environment: config.nodeEnv,
     timestamp: new Date().toISOString(),
+    dbConnected: mongoose.connection.readyState === 1,
   });
 });
 
